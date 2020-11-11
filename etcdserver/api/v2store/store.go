@@ -91,16 +91,20 @@ func New(namespaces ...string) Store {
 }
 
 func newStore(namespaces ...string) *store {
+	/*新增store 实例*/
 	s := new(store)
+	/*指定当前版本*/
 	s.CurrentVersion = defaultVersion
+	/* 创建其在etcd中对应的目录，第一个目录是以(/) */
 	s.Root = newDir(s, "/", s.CurrentIndex, nil, Permanent)
+	/*  循环迭代namespace，一个namespace对应一个目录 */
 	for _, namespace := range namespaces {
 		s.Root.Add(newDir(s, namespace, s.CurrentIndex, s.Root, Permanent))
 	}
-	s.Stats = newStats()
-	s.WatcherHub = newWatchHub(1000)
-	s.ttlKeyHeap = newTtlKeyHeap()
-	s.readonlySet = types.NewUnsafeSet(append(namespaces, "/")...)
+	s.Stats = newStats()       // 累计值
+	s.WatcherHub = newWatchHub(1000)  // 新建关于store的water数
+	s.ttlKeyHeap = newTtlKeyHeap()    // 新建key heap
+	s.readonlySet = types.NewUnsafeSet(append(namespaces, "/")...) //
 	return s
 }
 
@@ -110,6 +114,8 @@ func (s *store) Version() int {
 }
 
 // Index retrieves the current index of the store.
+/* // 当前store的index.
+// 通过使用store的world lock【读锁】锁定当前store的 防止读取当前store的index出现数据安全问题 */
 func (s *store) Index() uint64 {
 	s.worldLock.RLock()
 	defer s.worldLock.RUnlock()
@@ -119,14 +125,21 @@ func (s *store) Index() uint64 {
 // Get returns a get event.
 // If recursive is true, it will return all the content under the node path.
 // If sorted is true, it will sort the content by keys.
+
+/*
+// 当recursive=true时，即将获取指定的node下面所有的内容 否则只获取当前node内容（不包括子node内容）
+// 当stored=true，将按照key的自然排序输出node的内容
+ */
 func (s *store) Get(nodePath string, recursive, sorted bool) (*Event, error) {
 	var err *v2error.Error
 
+	// get操作时为了防止内容读取过程中出现变更 通过使用读取锁store的world lock，来锁定当前store
 	s.worldLock.RLock()
 	defer s.worldLock.RUnlock()
 
 	defer func() {
 		if err == nil {
+			// 变更stats的内容  增加成次数
 			s.Stats.Inc(GetSuccess)
 			if recursive {
 				reportReadSuccess(GetRecursive)
@@ -136,6 +149,8 @@ func (s *store) Get(nodePath string, recursive, sorted bool) (*Event, error) {
 			return
 		}
 
+		// 读取失败
+		// 增长fail次数
 		s.Stats.Inc(GetFail)
 		if recursive {
 			reportReadFailure(GetRecursive)
@@ -144,11 +159,13 @@ func (s *store) Get(nodePath string, recursive, sorted bool) (*Event, error) {
 		}
 	}()
 
+	/* // 辅助类： 获取指定的nodepath对应的node */
 	n, err := s.internalGet(nodePath)
 	if err != nil {
 		return nil, err
 	}
 
+	// 若是get操作成功 则需返回一个event
 	e := newEvent(Get, nodePath, n.ModifiedIndex, n.CreatedIndex)
 	e.EtcdIndex = s.CurrentIndex
 	e.Node.loadInternalNode(n, recursive, sorted, s.clock)
@@ -641,6 +658,8 @@ func (s *store) internalCreate(nodePath string, dir bool, value string, unique, 
 }
 
 // InternalGet gets the node of the given nodePath.
+
+/* // 辅助类： 获取指定的nodepath对应的node */
 func (s *store) internalGet(nodePath string) (*node, *v2error.Error) {
 	nodePath = path.Clean(path.Join("/", nodePath))
 

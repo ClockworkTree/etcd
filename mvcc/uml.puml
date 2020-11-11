@@ -1,0 +1,701 @@
+@startuml
+namespace backend {
+    interface Backend  {
+        + ReadTx() ReadTx
+        + BatchTx() BatchTx
+        + ConcurrentReadTx() ReadTx
+        + Snapshot() Snapshot
+        + Hash(ignores <font color=blue>map</font>[IgnoreKey]<font color=blue>struct</font>{}) (uint32, error)
+        + Size() int64
+        + SizeInUse() int64
+        + OpenReadTxN() int64
+        + Defrag() error
+        + ForceCommit() 
+        + Close() error
+
+    }
+    class BackendConfig << (S,Aquamarine) >> {
+        + Path string
+        + BatchInterval time.Duration
+        + BatchLimit int
+        + BackendFreelistType bbolt.FreelistType
+        + MmapSize uint64
+        + Logger *zap.Logger
+        + UnsafeNoFsync bool
+
+        - mmapSize() int
+        - mmapSize() int
+        - mmapSize() int
+
+    }
+    interface BatchTx  {
+        + UnsafeCreateBucket(name []byte) 
+        + UnsafePut(bucketName []byte, key []byte, value []byte) 
+        + UnsafeSeqPut(bucketName []byte, key []byte, value []byte) 
+        + UnsafeDelete(bucketName []byte, key []byte) 
+        + Commit() 
+        + CommitAndStop() 
+
+    }
+    class IgnoreKey << (S,Aquamarine) >> {
+        + Bucket string
+        + Key string
+
+    }
+    interface ReadTx  {
+        + Lock() 
+        + Unlock() 
+        + RLock() 
+        + RUnlock() 
+        + UnsafeRange(bucketName []byte, key []byte, endKey []byte, limit int64) ([][]byte, [][]byte)
+        + UnsafeForEach(bucketName []byte, visitor <font color=blue>func</font>([]byte, []byte) error) error
+
+    }
+    interface Snapshot  {
+        + Size() int64
+        + WriteTo(w io.Writer) (int64, error)
+        + Close() error
+
+    }
+    class backend << (S,Aquamarine) >> {
+        - size int64
+        - sizeInUse int64
+        - commits int64
+        - openReadTxN int64
+        - mu sync.RWMutex
+        - db *bbolt.DB
+        - batchInterval time.Duration
+        - batchLimit int
+        - batchTx *batchTxBuffered
+        - readTx *readTx
+        - stopc <font color=blue>chan</font> <font color=blue>struct</font>{}
+        - donec <font color=blue>chan</font> <font color=blue>struct</font>{}
+        - lg *zap.Logger
+
+        - run() 
+        - defrag() error
+        - begin(write bool) *bbolt.Tx
+        - unsafeBegin(write bool) *bbolt.Tx
+
+        + BatchTx() BatchTx
+        + ReadTx() ReadTx
+        + ConcurrentReadTx() ReadTx
+        + ForceCommit() 
+        + Snapshot() Snapshot
+        + Hash(ignores <font color=blue>map</font>[IgnoreKey]<font color=blue>struct</font>{}) (uint32, error)
+        + Size() int64
+        + SizeInUse() int64
+        + Close() error
+        + Commits() int64
+        + Defrag() error
+        + OpenReadTxN() int64
+
+    }
+    class batchTx << (S,Aquamarine) >> {
+        - tx *bbolt.Tx
+        - backend *backend
+        - pending int
+
+        - unsafePut(bucketName []byte, key []byte, value []byte, seq bool) 
+        - safePending() int
+        - commit(stop bool) 
+
+        + Lock() 
+        + Unlock() 
+        + RLock() 
+        + RUnlock() 
+        + UnsafeCreateBucket(name []byte) 
+        + UnsafePut(bucketName []byte, key []byte, value []byte) 
+        + UnsafeSeqPut(bucketName []byte, key []byte, value []byte) 
+        + UnsafeRange(bucketName []byte, key []byte, endKey []byte, limit int64) ([][]byte, [][]byte)
+        + UnsafeDelete(bucketName []byte, key []byte) 
+        + UnsafeForEach(bucketName []byte, visitor <font color=blue>func</font>([]byte, []byte) error) error
+        + Commit() 
+        + CommitAndStop() 
+
+    }
+    class batchTxBuffered << (S,Aquamarine) >> {
+        - buf txWriteBuffer
+
+        - commit(stop bool) 
+        - unsafeCommit(stop bool) 
+
+        + Unlock() 
+        + Commit() 
+        + CommitAndStop() 
+        + UnsafePut(bucketName []byte, key []byte, value []byte) 
+        + UnsafeSeqPut(bucketName []byte, key []byte, value []byte) 
+
+    }
+    class bucketBuffer << (S,Aquamarine) >> {
+        - buf []kv
+        - used int
+
+        - add(k []byte, v []byte) 
+        - merge(bbsrc *bucketBuffer) 
+
+        + Range(key []byte, endKey []byte, limit int64) ([][]byte, [][]byte)
+        + ForEach(visitor <font color=blue>func</font>([]byte, []byte) error) error
+        + Len() int
+        + Less(i int, j int) bool
+        + Swap(i int, j int) 
+        + Copy() *bucketBuffer
+
+    }
+    class concurrentReadTx << (S,Aquamarine) >> {
+        - buf txReadBuffer
+        - txMu *sync.RWMutex
+        - tx *bbolt.Tx
+        - buckets <font color=blue>map</font>[string]*bbolt.Bucket
+        - txWg *sync.WaitGroup
+
+        + Lock() 
+        + Unlock() 
+        + RLock() 
+        + RUnlock() 
+        + UnsafeForEach(bucketName []byte, visitor <font color=blue>func</font>([]byte, []byte) error) error
+        + UnsafeRange(bucketName []byte, key []byte, endKey []byte, limit int64) ([][]byte, [][]byte)
+
+    }
+    class kv << (S,Aquamarine) >> {
+        - key []byte
+        - val []byte
+
+    }
+    class readTx << (S,Aquamarine) >> {
+        - mu sync.RWMutex
+        - buf txReadBuffer
+        - txMu sync.RWMutex
+        - tx *bbolt.Tx
+        - buckets <font color=blue>map</font>[string]*bbolt.Bucket
+        - txWg *sync.WaitGroup
+
+        - reset() 
+
+        + Lock() 
+        + Unlock() 
+        + RLock() 
+        + RUnlock() 
+        + UnsafeRange(bucketName []byte, key []byte, endKey []byte, limit int64) ([][]byte, [][]byte)
+        + UnsafeForEach(bucketName []byte, visitor <font color=blue>func</font>([]byte, []byte) error) error
+
+    }
+    class snapshot << (S,Aquamarine) >> {
+        - stopc <font color=blue>chan</font> <font color=blue>struct</font>{}
+        - donec <font color=blue>chan</font> <font color=blue>struct</font>{}
+
+        + Close() error
+
+    }
+    class txBuffer << (S,Aquamarine) >> {
+        - buckets <font color=blue>map</font>[string]*bucketBuffer
+
+        - reset() 
+
+    }
+    class txReadBuffer << (S,Aquamarine) >> {
+        - unsafeCopy() txReadBuffer
+
+        + Range(bucketName []byte, key []byte, endKey []byte, limit int64) ([][]byte, [][]byte)
+        + ForEach(bucketName []byte, visitor <font color=blue>func</font>([]byte, []byte) error) error
+
+    }
+    class txWriteBuffer << (S,Aquamarine) >> {
+        - seq bool
+
+        - put(bucket []byte, k []byte, v []byte) 
+        - putSeq(bucket []byte, k []byte, v []byte) 
+        - writeback(txr *txReadBuffer) 
+
+    }
+}
+"backend.ReadTx" *-- "backend.BatchTx"
+"sync.Mutex" *-- "backend.batchTx"
+"backend.batchTx" *-- "backend.batchTxBuffered"
+"bbolt.Tx" *-- "backend.snapshot"
+"backend.txBuffer" *-- "backend.txReadBuffer"
+"backend.txBuffer" *-- "backend.txWriteBuffer"
+
+"backend.Backend" <|-- "backend.backend"
+"backend.BatchTx" <|-- "backend.batchTx"
+"backend.ReadTx" <|-- "backend.batchTx"
+"backend.ReadTx" <|-- "backend.concurrentReadTx"
+"backend.ReadTx" <|-- "backend.readTx"
+
+namespace mvcc {
+    interface ConsistentIndexGetter  {
+        + ConsistentIndex() uint64
+
+    }
+    interface ConsistentWatchableKV  {
+        + ConsistentIndex() uint64
+
+    }
+    interface KV  {
+        + Read(trace *traceutil.Trace) TxnRead
+        + Write(trace *traceutil.Trace) TxnWrite
+        + Hash() (uint32, int64, error)
+        + HashByRev(rev int64) (uint32, int64, int64, error)
+        + Compact(trace *traceutil.Trace, rev int64) (<font color=blue>chan</font> <font color=blue>struct</font>{}, error)
+        + Commit() 
+        + Restore(b backend.Backend) error
+        + Close() error
+
+    }
+    class RangeOptions << (S,Aquamarine) >> {
+        + Limit int64
+        + Rev int64
+        + Count bool
+
+    }
+    class RangeResult << (S,Aquamarine) >> {
+        + KVs []mvccpb.KeyValue
+        + Rev int64
+        + Count int
+
+    }
+    interface ReadView  {
+        + FirstRev() int64
+        + Rev() int64
+        + Range(key []byte, end []byte, ro RangeOptions) (*RangeResult, error)
+
+    }
+    class StoreConfig << (S,Aquamarine) >> {
+        + CompactionBatchLimit int
+
+    }
+    interface TxnRead  {
+        + End() 
+
+    }
+    interface TxnWrite  {
+        + Changes() []mvccpb.KeyValue
+
+    }
+    class WatchResponse << (S,Aquamarine) >> {
+        + WatchID WatchID
+        + Events []mvccpb.Event
+        + Revision int64
+        + CompactRevision int64
+
+    }
+    interface WatchStream  {
+        + Watch(id WatchID, key []byte, end []byte, startRev int64, fcs ...FilterFunc) (WatchID, error)
+        + Chan() <font color=blue>chan</font> WatchResponse
+        + RequestProgress(id WatchID) 
+        + Cancel(id WatchID) error
+        + Close() 
+        + Rev() int64
+
+    }
+    interface Watchable  {
+        + NewWatchStream() WatchStream
+
+    }
+    interface WatchableKV  {
+    }
+    interface WriteView  {
+        + DeleteRange(key []byte, end []byte) int64
+        + Put(key []byte, value []byte, lease lease.LeaseID) int64
+
+    }
+    class eventBatch << (S,Aquamarine) >> {
+        - evs []mvccpb.Event
+        - revs int
+        - moreRev int64
+
+        - add(ev mvccpb.Event) 
+
+    }
+    class generation << (S,Aquamarine) >> {
+        - ver int64
+        - created revision
+        - revs []revision
+
+        - isEmpty() bool
+        - walk(f <font color=blue>func</font>(revision) bool) int
+        - equal(b generation) bool
+
+        + String() string
+
+    }
+    interface index  {
+        + Get(key []byte, atRev int64) (revision, int64, error)
+        + Range(key []byte, end []byte, atRev int64) ([][]byte, []revision)
+        + Revisions(key []byte, end []byte, atRev int64) []revision
+        + Put(key []byte, rev revision) 
+        + Tombstone(key []byte, rev revision) error
+        + RangeSince(key []byte, end []byte, rev int64) []revision
+        + Compact(rev int64) <font color=blue>map</font>[revision]<font color=blue>struct</font>{}
+        + Keep(rev int64) <font color=blue>map</font>[revision]<font color=blue>struct</font>{}
+        + Equal(b index) bool
+        + Insert(ki *keyIndex) 
+        + KeyIndex(ki *keyIndex) *keyIndex
+
+    }
+    class keyIndex << (S,Aquamarine) >> {
+        - key []byte
+        - modified revision
+        - generations []generation
+
+        - put(lg *zap.Logger, main int64, sub int64) 
+        - restore(lg *zap.Logger, created revision, modified revision, ver int64) 
+        - tombstone(lg *zap.Logger, main int64, sub int64) error
+        - get(lg *zap.Logger, atRev int64) (revision, int64, error)
+        - since(lg *zap.Logger, rev int64) []revision
+        - compact(lg *zap.Logger, atRev int64, available <font color=blue>map</font>[revision]<font color=blue>struct</font>{}) 
+        - keep(atRev int64, available <font color=blue>map</font>[revision]<font color=blue>struct</font>{}) 
+        - doCompact(atRev int64, available <font color=blue>map</font>[revision]<font color=blue>struct</font>{}) (int, int)
+        - isEmpty() bool
+        - findGeneration(rev int64) *generation
+        - equal(b *keyIndex) bool
+
+        + Less(b btree.Item) bool
+        + String() string
+
+    }
+    class metricsTxnWrite << (S,Aquamarine) >> {
+        - ranges uint
+        - puts uint
+        - deletes uint
+        - putSize int64
+
+        + Range(key []byte, end []byte, ro RangeOptions) (*RangeResult, error)
+        + DeleteRange(key []byte, end []byte) int64
+        + Put(key []byte, value []byte, lease lease.LeaseID) int64
+        + End() 
+
+    }
+    class mvcc.FilterFunc << (T, #FF7700) >>  {
+    }
+    class mvcc.WatchID << (T, #FF7700) >>  {
+    }
+    class mvcc.cancelFunc << (T, #FF7700) >>  {
+    }
+    class mvcc.revisions << (T, #FF7700) >>  {
+    }
+    class mvcc.watcherBatch << (T, #FF7700) >>  {
+    }
+    class mvcc.watcherSet << (T, #FF7700) >>  {
+    }
+    class mvcc.watcherSetByKey << (T, #FF7700) >>  {
+    }
+    class readView << (S,Aquamarine) >> {
+        - kv KV
+
+        + FirstRev() int64
+        + Rev() int64
+        + Range(key []byte, end []byte, ro RangeOptions) (*RangeResult, error)
+
+    }
+    class revKeyValue << (S,Aquamarine) >> {
+        - key []byte
+        - kv mvccpb.KeyValue
+        - kstr string
+
+    }
+    class revision << (S,Aquamarine) >> {
+        - main int64
+        - sub int64
+
+        + GreaterThan(b revision) bool
+
+    }
+    class revisions << (S,Aquamarine) >> {
+        + Len() int
+        + Less(i int, j int) bool
+        + Swap(i int, j int) 
+
+    }
+    class store << (S,Aquamarine) >> {
+        - consistentIndex uint64
+        - cfg StoreConfig
+        - mu sync.RWMutex
+        - ig ConsistentIndexGetter
+        - b backend.Backend
+        - kvindex index
+        - le lease.Lessor
+        - revMu sync.RWMutex
+        - currentRev int64
+        - compactMainRev int64
+        - bytesBuf8 []byte
+        - fifoSched schedule.Scheduler
+        - stopc <font color=blue>chan</font> <font color=blue>struct</font>{}
+        - lg *zap.Logger
+
+        - compactBarrier(ctx context.Context, ch <font color=blue>chan</font> <font color=blue>struct</font>{}) 
+        - updateCompactRev(rev int64) (<font color=blue>chan</font> <font color=blue>struct</font>{}, error)
+        - compact(trace *traceutil.Trace, rev int64) (<font color=blue>chan</font> <font color=blue>struct</font>{}, error)
+        - compactLockfree(rev int64) (<font color=blue>chan</font> <font color=blue>struct</font>{}, error)
+        - restore() error
+        - saveIndex(tx backend.BatchTx) 
+        - setupMetricsReporter() 
+        - scheduleCompaction(compactMainRev int64, keep <font color=blue>map</font>[revision]<font color=blue>struct</font>{}) bool
+
+        + Hash() (uint32, int64, error)
+        + HashByRev(rev int64) (uint32, int64, int64, error)
+        + Compact(trace *traceutil.Trace, rev int64) (<font color=blue>chan</font> <font color=blue>struct</font>{}, error)
+        + Commit() 
+        + Restore(b backend.Backend) error
+        + Close() error
+        + ConsistentIndex() uint64
+        + Read(trace *traceutil.Trace) TxnRead
+        + Write(trace *traceutil.Trace) TxnWrite
+
+    }
+    class storeTxnRead << (S,Aquamarine) >> {
+        - s *store
+        - tx backend.ReadTx
+        - firstRev int64
+        - rev int64
+        - trace *traceutil.Trace
+
+        - rangeKeys(key []byte, end []byte, curRev int64, ro RangeOptions) (*RangeResult, error)
+
+        + FirstRev() int64
+        + Rev() int64
+        + Range(key []byte, end []byte, ro RangeOptions) (*RangeResult, error)
+        + End() 
+
+    }
+    class storeTxnWrite << (S,Aquamarine) >> {
+        - tx backend.BatchTx
+        - beginRev int64
+        - changes []mvccpb.KeyValue
+
+        - put(key []byte, value []byte, leaseID lease.LeaseID) 
+        - deleteRange(key []byte, end []byte) int64
+        - delete(key []byte) 
+
+        + Rev() int64
+        + Range(key []byte, end []byte, ro RangeOptions) (*RangeResult, error)
+        + DeleteRange(key []byte, end []byte) (int64, int64)
+        + Put(key []byte, value []byte, lease lease.LeaseID) int64
+        + End() 
+        + Changes() []mvccpb.KeyValue
+
+    }
+    class treeIndex << (S,Aquamarine) >> {
+        - tree *btree.BTree
+        - lg *zap.Logger
+
+        - keyIndex(keyi *keyIndex) *keyIndex
+        - visit(key []byte, end []byte, f <font color=blue>func</font>(*keyIndex) ) 
+
+        + Put(key []byte, rev revision) 
+        + Get(key []byte, atRev int64) (revision, int64, error)
+        + KeyIndex(keyi *keyIndex) *keyIndex
+        + Revisions(key []byte, end []byte, atRev int64) []revision
+        + Range(key []byte, end []byte, atRev int64) ([][]byte, []revision)
+        + Tombstone(key []byte, rev revision) error
+        + RangeSince(key []byte, end []byte, rev int64) []revision
+        + Compact(rev int64) <font color=blue>map</font>[revision]<font color=blue>struct</font>{}
+        + Keep(rev int64) <font color=blue>map</font>[revision]<font color=blue>struct</font>{}
+        + Equal(bi index) bool
+        + Insert(ki *keyIndex) 
+
+    }
+    class txnReadWrite << (S,Aquamarine) >> {
+        + DeleteRange(key []byte, end []byte) int64
+        + Put(key []byte, value []byte, lease lease.LeaseID) int64
+        + Changes() []mvccpb.KeyValue
+
+    }
+    class watchStream << (S,Aquamarine) >> {
+        - watchable watchable
+        - ch <font color=blue>chan</font> WatchResponse
+        - mu sync.Mutex
+        - nextID WatchID
+        - closed bool
+        - cancels <font color=blue>map</font>[WatchID]cancelFunc
+        - watchers <font color=blue>map</font>[WatchID]*watcher
+
+        + Watch(id WatchID, key []byte, end []byte, startRev int64, fcs ...FilterFunc) (WatchID, error)
+        + Chan() <font color=blue>chan</font> WatchResponse
+        + Cancel(id WatchID) error
+        + Close() 
+        + Rev() int64
+        + RequestProgress(id WatchID) 
+
+    }
+    interface watchable  {
+        - watch(key []byte, end []byte, startRev int64, id WatchID, ch <font color=blue>chan</font> WatchResponse, fcs ...FilterFunc) (*watcher, cancelFunc)
+        - progress(w *watcher) 
+        - rev() int64
+
+    }
+    class watchableStore << (S,Aquamarine) >> {
+        - mu sync.RWMutex
+        - victims []watcherBatch
+        - victimc <font color=blue>chan</font> <font color=blue>struct</font>{}
+        - unsynced watcherGroup
+        - synced watcherGroup
+        - stopc <font color=blue>chan</font> <font color=blue>struct</font>{}
+        - wg sync.WaitGroup
+
+        - watch(key []byte, end []byte, startRev int64, id WatchID, ch <font color=blue>chan</font> WatchResponse, fcs ...FilterFunc) (*watcher, cancelFunc)
+        - cancelWatcher(wa *watcher) 
+        - syncWatchersLoop() 
+        - syncVictimsLoop() 
+        - moveVictims() int
+        - syncWatchers() int
+        - notify(rev int64, evs []mvccpb.Event) 
+        - addVictim(victim watcherBatch) 
+        - rev() int64
+        - progress(w *watcher) 
+
+        + Close() error
+        + NewWatchStream() WatchStream
+        + Restore(b backend.Backend) error
+        + Write(trace *traceutil.Trace) TxnWrite
+
+    }
+    class watchableStoreTxnWrite << (S,Aquamarine) >> {
+        - s *watchableStore
+
+        + End() 
+
+    }
+    class watcher << (S,Aquamarine) >> {
+        - key []byte
+        - end []byte
+        - victim bool
+        - compacted bool
+        - restore bool
+        - minRev int64
+        - id WatchID
+        - fcs []FilterFunc
+        - ch <font color=blue>chan</font> WatchResponse
+
+        - send(wr WatchResponse) bool
+
+    }
+    class watcherBatch << (S,Aquamarine) >> {
+        - add(w *watcher, ev mvccpb.Event) 
+
+    }
+    class watcherGroup << (S,Aquamarine) >> {
+        - keyWatchers watcherSetByKey
+        - ranges adt.IntervalTree
+        - watchers watcherSet
+
+        - add(wa *watcher) 
+        - contains(key string) bool
+        - size() int
+        - delete(wa *watcher) bool
+        - choose(maxWatchers int, curRev int64, compactRev int64) (*watcherGroup, int64)
+        - chooseAll(curRev int64, compactRev int64) int64
+        - watcherSetByKey(key string) watcherSet
+
+    }
+    class watcherSet << (S,Aquamarine) >> {
+        - add(wa *watcher) 
+        - union(ws watcherSet) 
+        - delete(wa *watcher) 
+
+    }
+    class watcherSetByKey << (S,Aquamarine) >> {
+        - add(wa *watcher) 
+        - delete(wa *watcher) bool
+
+    }
+    class writeView << (S,Aquamarine) >> {
+        - kv KV
+
+        + DeleteRange(key []byte, end []byte) int64
+        + Put(key []byte, value []byte, lease lease.LeaseID) int64
+
+    }
+    class "<font color=blue>func</font>(mvccpb.Event) bool" as fontcolorbluefuncfontmvccpbEventbool {
+        'This class was created so that we can correctly have an alias pointing to this name. Since it contains dots that can break namespaces
+    }
+}
+"mvcc.WatchableKV" *-- "mvcc.ConsistentWatchableKV"
+"mvcc.ReadView" *-- "mvcc.KV"
+"mvcc.WriteView" *-- "mvcc.KV"
+"mvcc.ReadView" *-- "mvcc.TxnRead"
+"mvcc.TxnRead" *-- "mvcc.TxnWrite"
+"mvcc.WriteView" *-- "mvcc.TxnWrite"
+"mvcc.KV" *-- "mvcc.WatchableKV"
+"mvcc.Watchable" *-- "mvcc.WatchableKV"
+"mvcc.TxnWrite" *-- "mvcc.metricsTxnWrite"
+"mvcc.ReadView" *-- "mvcc.store"
+"mvcc.WriteView" *-- "mvcc.store"
+"mvcc.storeTxnRead" *-- "mvcc.storeTxnWrite"
+"sync.RWMutex" *-- "mvcc.treeIndex"
+"mvcc.TxnRead" *-- "mvcc.txnReadWrite"
+"mvcc.store" *-- "mvcc.watchableStore"
+"mvcc.TxnWrite" *-- "mvcc.watchableStoreTxnWrite"
+
+"mvcc.TxnRead" <|-- "mvcc.metricsTxnWrite"
+"mvcc.WriteView" <|-- "mvcc.metricsTxnWrite"
+"mvcc.ReadView" <|-- "mvcc.readView"
+"mvcc.ConsistentIndexGetter" <|-- "mvcc.store"
+"mvcc.ConsistentWatchableKV" <|-- "mvcc.store"
+"mvcc.KV" <|-- "mvcc.store"
+"mvcc.ReadView" <|-- "mvcc.storeTxnRead"
+"mvcc.TxnRead" <|-- "mvcc.storeTxnRead"
+"mvcc.TxnRead" <|-- "mvcc.storeTxnWrite"
+"mvcc.TxnWrite" <|-- "mvcc.storeTxnWrite"
+"mvcc.index" <|-- "mvcc.treeIndex"
+"mvcc.TxnWrite" <|-- "mvcc.txnReadWrite"
+"mvcc.WriteView" <|-- "mvcc.txnReadWrite"
+"mvcc.WatchStream" <|-- "mvcc.watchStream"
+"mvcc.Watchable" <|-- "mvcc.watchableStore"
+"mvcc.watchable" <|-- "mvcc.watchableStore"
+"mvcc.TxnRead" <|-- "mvcc.watchableStoreTxnWrite"
+"mvcc.WriteView" <|-- "mvcc.writeView"
+
+namespace mvccpb {
+    class Event << (S,Aquamarine) >> {
+        + Type Event_EventType
+        + Kv *KeyValue
+        + PrevKv *KeyValue
+
+        + Reset() 
+        + String() string
+        + ProtoMessage() 
+        + Descriptor() ([]byte, []int)
+        + Marshal() ([]byte, error)
+        + MarshalTo(dAtA []byte) (int, error)
+        + Size() int
+        + Unmarshal(dAtA []byte) error
+
+    }
+    class Event_EventType << (S,Aquamarine) >> {
+        + String() string
+        + EnumDescriptor() ([]byte, []int)
+
+    }
+    class KeyValue << (S,Aquamarine) >> {
+        + Key []byte
+        + CreateRevision int64
+        + ModRevision int64
+        + Version int64
+        + Value []byte
+        + Lease int64
+
+        + Reset() 
+        + String() string
+        + ProtoMessage() 
+        + Descriptor() ([]byte, []int)
+        + Marshal() ([]byte, error)
+        + MarshalTo(dAtA []byte) (int, error)
+        + Size() int
+        + Unmarshal(dAtA []byte) error
+
+    }
+    class mvccpb.Event_EventType << (T, #FF7700) >>  {
+    }
+}
+
+
+"__builtin__.int32" #.. "mvccpb.Event_EventType"
+"__builtin__.int64" #.. "mvcc.WatchID"
+"mvcc.<font color=blue>func</font>() " #.. "mvcc.cancelFunc"
+"mvcc.fontcolorbluefuncfontmvccpbEventbool" #.. "mvcc.FilterFunc"
+"mvcc.<font color=blue>map</font>[*watcher]*{packageName}eventBatch" #.. "mvcc.watcherBatch"
+"mvcc.<font color=blue>map</font>[*watcher]<font color=blue>struct</font>{}" #.. "mvcc.watcherSet"
+"mvcc.<font color=blue>map</font>[string]watcherSet" #.. "mvcc.watcherSetByKey"
+"mvcc.[]revision" #.. "mvcc.revisions"
+@enduml
